@@ -11,7 +11,6 @@ class IS31FL3741(object):
 
     address = 0x50
     busnum = 1
-    syncmode = REGISTER_FUNCTION_CONFIGURATION_SYNC_CLOCK_SINGLE
     breathing = 0
     softwareshutdown = 0
     currentPage = PAGE_LEDONOFF
