@@ -9,16 +9,19 @@ class IS31FL3741DeviceNotFound(IOError):
 
 class IS31FL3741(object):
 
-    address = 0x50
-    busnum = 1
-    breathing = 0
+    address = 0x30
+    busnum = 8
     softwareshutdown = 0
-    currentPage = PAGE_LEDONOFF
-    pixels = [[0] * 16 for i in range(12)]
-    triggerOpenShortDetection = 1
+    currentPage = PAGE_LEDPWM1
+    enabledOutputs = 9
+    logicLevelHigh = True
+    pixels = [[0] * 39 for i in range(9)]
+    triggerShortDetection = 1
+    triggerOpenDetection = 1
     DEBUG = False
     lastDebug = ""
     name = "IS31FL3741"
+    scalingDefault = 255
 
     def debug(self, *args):
         if self.DEBUG:
@@ -43,7 +46,7 @@ class IS31FL3741(object):
         # key=value parameters
 
         if type (kwargs) is not None:
-          for key, value in kwargs.iteritems():
+          for key, value in kwargs.items():
               if type(value) is dict:
                   if getattr(self,key):
                         tempdict = getattr(self,key).copy()
@@ -93,10 +96,10 @@ class IS31FL3741(object):
             pass
 
         # later IS31FL37xx devices support this...
-
+        self.selectPage(PAGE_FUNCTION)
         try:
             idregister=self.read(REGISTER_ID)
-            if idregister != self.address:
+            if idregister != self.address * 2:
                 raise TypeError('ID register value',idregister,'does not match IS31FL3741 value:',self.address)
         except IOError:
             # all's well.
@@ -119,61 +122,116 @@ class IS31FL3741(object):
 
     def reset(self):
         self.selectPage(PAGE_FUNCTION)
-        self.currentPage = PAGE_LEDONOFF
-        self.debug("reset got",self.read(REGISTER_FUNCTION_RESET))
-
-    def enableAllPixels(self):
-        self.selectPage(PAGE_LEDONOFF)
-        self.writeBlock(0, [ 255 ] * 0x18 )
-        self.selectPage(PAGE_LEDPWM)
-        for i in range(0,12):
-            self.writeBlock(i*16,[ 255 ] * (16))
-
-    def setPixelPower(self,row,col,val):
-        address = row*2 + (col > 7)
-# This needs work
+        self.currentPage = PAGE_FUNCTION
+        self.write(REGISTER_FUNCTION_RESET,VALUE_FUNCTION_RESET)
+        self.setAllPixelsScaling([self.scalingDefault] * REGISTER_LEDSCALING_LENGTH)
+        self.debug("Controller reset. Scaling reset to",self.scalingDefault)
 
 
     def setPixelPWM(self,row,col,val,immediate=True):
-        pixel = row*16 + col
+        pixel = row*39 + col
         self.pixels[row][col] = val
         # self.debug(row*16,col,"=",row*16 + col)
+        page = PAGE_LEDPWM1
+        address = pixel
+        if address > REGISTER_LEDPWM_LENGTH:
+            raise ValueError("Pixel row/col value is beyond allowable max")
+        if address > REGISTER_LEDPWM1_END:
+            page = PAGE_LEDPWM2
+            address -= (REGISTER_LEDPWM1_END + 1)
+
         if immediate:
-            self.selectPage(PAGE_LEDPWM)
-            self.write(pixel,val)
+            self.selectPage(page)
+            self.write(address,val)
 
     def setAllPixelsPWM(self,values):
-        # self.debug("length is",len(values))
-        self.selectPage(PAGE_LEDPWM)
+        desiredLength = REGISTER_LEDPWM_LENGTH
+        if len(values) != desiredLength:
+            raise ValueError("Received wrong length for setAllPixelsPWM: " + str(len(values)) + ", wanted " + str(desiredLength))
 
-        # messageAddress = i2c_msg.write(self.address, [0])
-        # messageToSend = i2c_msg.write(self.address, values)
-        # self.smbus.i2c_rdwr(messageAddress,messageToSend)
+        # so the desired register structure in IS31FL3741 is, uh, unusual
+        #
+        # for each row, pixels 0-29 are in Page 1 if row < 6; else Page 2
+        # and pixels 30-38 are always in Page 2
+        # 
+        # row 0: page 0, addresses 0:29 ... and page 1, addresses 90:98
+        # row 1: page 0, addresses 30:59 ...    page 1, addresses 99:107
+        # ...
+        # row 6: page 1, addresses 0:29     and page 1, addresses 144:152
+        # row 7: page 1, addresses 0:59         page 1, addresses 153:161
 
-        # TODO set the values in the array
+        pageOne, pageTwo = [], []
+        for i in range(6):
+            pageOne += values[ 39 * i : 39 * i + 30]
+        for i in range(6,9):
+            pageTwo += values[ 39 * i : 39 * i + 30]
+        for i in range(9):
+            pageTwo += values[ 39 * i + 30 : 39 * (i + 1) ] 
+
+        # pageOne = values[REGISTER_LEDPWM1_START:REGISTER_LEDPWM1_END+1]
+        # pageTwo = values[REGISTER_LEDPWM1_END+1:REGISTER_LEDPWM1_END+1+REGISTER_LEDPWM2_END+1]
+
+
+        self.selectPage(PAGE_LEDPWM1)
+        iterator = 0
+        messages = []
+        for chunk in self.chunks(pageOne,32):
+            chunk.insert(0, iterator * 32)
+            messages.append(i2c_msg.write(self.address, chunk))
+            iterator += 1
+        self.smbus.i2c_rdwr(*messages)
+
+        self.selectPage(PAGE_LEDPWM2)
+        messages = []
+        iterator = 0
+        for chunk in self.chunks(pageTwo,32):
+            chunk.insert(0, iterator * 32)
+            messages.append(i2c_msg.write(self.address, chunk))
+            
+            iterator += 1
+        self.smbus.i2c_rdwr(*messages)
+
+
+    def setAllPixelsScaling(self,values):
+        desiredLength = REGISTER_LEDSCALING_LENGTH
+        if len(values) != desiredLength:
+            raise ValueError("Received wrong length for setAllPixelsScaling: " + str(len(values)) + ", wanted " + str(desiredLength))
+        pageOne = values[REGISTER_LEDSCALING1_START:REGISTER_LEDSCALING1_END+1]
+        pageTwo = values[REGISTER_LEDSCALING1_END+1:REGISTER_LEDSCALING1_END+1+REGISTER_LEDSCALING2_END+1]
 
         iter = 0
+        self.selectPage(PAGE_LEDSCALING1)
         messages = []
-
-        for chunk in self.chunks(values,32):
+        for chunk in self.chunks(pageOne,32):
             # self.writeBlock(iter*32,chunk)
             # dest = [iter * 32, *chunk]
             chunk.insert(0, iter * 32)
             messages.append(i2c_msg.write(self.address, chunk))
-            # messages.append(i2c_msg.write(self.address, chunk))
             iter += 1
-
         self.smbus.i2c_rdwr(*messages)
 
-    def setAllPixels(self,values):
-        self.debug("length is",len(values))
-        self.selectPage(PAGE_LEDONOFF)
-        self.writeBlock(0,values)
+        iter = 0
+        self.selectPage(PAGE_LEDSCALING2)
+        messages = []
+        for chunk in self.chunks(pageTwo,32):
+            # self.writeBlock(iter*32,chunk)
+            # dest = [iter * 32, *chunk]
+            chunk.insert(0, iter * 32)
+            messages.append(i2c_msg.write(self.address, chunk))
+            iter += 1
+        self.smbus.i2c_rdwr(*messages)
 
     def setConfiguration(self):
         self.selectPage(PAGE_FUNCTION)
-        regvalue = ( self.breathing * REGISTER_FUNCTION_CONFIGURATION_BREATHING_ENABLE ) | ( self.syncmode ) | ( ( not self.softwareshutdown ) * REGISTER_FUNCTION_CONFIGURATION_SOFTWARE_SHUTDOWN ) | ( self.triggerOpenShortDetection * REGISTER_FUNCTION_CONFIGURATION_TRIGGER_OPEN_SHORT_DETECTION )
-        self.triggerOpenShortDetection = False
+
+        regvalue = ( (not self.softwareshutdown) * VALUE_FUNCTION_CONFIGURATION_SSD_SOFTWARE_SHUTDOWN)
+        regvalue |= (self.triggerShortDetection * VALUE_FUNCTION_CONFIGURATION_OSDE_SHORT_DETECTION)
+        regvalue |= (self.triggerOpenDetection * VALUE_FUNCTION_CONFIGURATION_OSDE_OPEN_DETECTION)
+        regvalue |= (self.logicLevelHigh * VALUE_FUNCTION_CONFIGURATION_LGC_HIGH_LOGIC_LEVEL)
+        regvalue |= (VALUE_FUNCTION_CONFIGURATION_SWS_OUTPUTS[self.enabledOutputs])
+
+        self.triggerShortDetection = False
+        self.triggerOpenDetection = False
         self.write(REGISTER_FUNCTION_CONFIGURATION, regvalue)
 
     def write(self,register,value):
@@ -186,24 +244,25 @@ class IS31FL3741(object):
         return self.smbus.read_byte_data(self.address,register)
         
     def getOpenPixels(self):
-        self.triggerOpenShortDetection = 1
+        self.triggerOpenDetection = 1
         self.setConfiguration()
         time.sleep(0.01)
-        self.selectPage(PAGE_LEDONOFF)
+        self.selectPage(PAGE_FUNCTION)
         returners = []
-        for i in range(REGISTER_LEDONOFF_OPEN_START, REGISTER_LEDONOFF_OPEN_STOP + 1): # python range not inclusive
+        for i in range(REGISTER_FUNCTION_OPEN_SHORT_START, REGISTER_FUNCTION_OPEN_SHORT_END + 1): # python range not inclusive
             returners.append(self.read(i))
         return returners
 
     def getShortPixels(self):
-        self.triggerOpenShortDetection = 1
+        self.triggerShortDetection = 1
         self.setConfiguration()
         time.sleep(0.01)
-        self.selectPage(PAGE_LEDONOFF)
+        self.selectPage(PAGE_FUNCTION)
         returners = []
-        for i in range(REGISTER_LEDONOFF_SHORT_START, REGISTER_LEDONOFF_SHORT_STOP + 1): # python range not inclusive
+        for i in range(REGISTER_FUNCTION_OPEN_SHORT_START, REGISTER_FUNCTION_OPEN_SHORT_END + 1): # python range not inclusive
             returners.append(self.read(i))
         return returners
+
     def chunks(self, values, length):
         for i in range(0, len(values), length):
             yield values[i:i + length]
@@ -212,78 +271,43 @@ class IS31FL3741(object):
         flat_list = [item for sublist in self.pixels for item in sublist]
         self.setAllPixelsPWM(0,flat_list)
 
-    def sevenSegment(self, row, col, value, brightness=0):
-        if brightness:
-            self.selectPage(PAGE_LEDPWM)
-            self.writeBlock(0,[brightness]*8)
-        self.selectPage(PAGE_LEDONOFF)
-        bits = 0B00000000
-        if value == 0:
-            bits = 0B00111111
-        elif value == 1:
-            bits = 0B00000110
-        elif value == 2:
-            bits = 0B01011011
-        elif value == 3:
-            bits = 0B01001111
-        elif value == 4:
-            bits = 0B01100110
-        elif value == 5:
-            bits = 0B01101101
-        elif value == 6:
-            bits = 0B01111101
-        elif value == 7:
-            bits = 0B00000111
-        elif value == 8:
-            bits = 0B01111111
-        elif value == 9:
-            bits = 0B01101111
-        # self.debug(value)
-        # self.debug(str(bits))
-        # bits = 0b11111111 - bits
-        self.write(row*2 + col + REGISTER_LEDONOFF_ONOFF_START,bits)
 
 
 if __name__ == '__main__':
-    for address in range(0x50,0x60):
+    for address in range(0x30,0x34):
         print("trying",address)
         try:
-            matrix = IS31FL3741(address=address, busnum=10, DEBUG=True)
-            print("powering on all pixels")
-            matrix.enableAllPixels()
+            matrix = IS31FL3741(address=address, busnum=8, DEBUG=True, enabledOutputs=9)
+            time.sleep(2)
+            print("powering on all pixels via PWM register")
+            matrix.setAllPixelsPWM([255]*REGISTER_LEDPWM_LENGTH)
             time.sleep(2)
             print("powering off all pixels via PWM register")
-            matrix.setAllPixelsPWM([0]*192)
-
-            print("let's try some 7-segment values (looks scrambled on most devices)")
-            for value in range(10):
-                print(value)
-                matrix.sevenSegment(0,0,value)
-                time.sleep(0.5)
+            matrix.setAllPixelsPWM([0]*REGISTER_LEDPWM_LENGTH)
 
             time.sleep(2)
 
             print("let's fade up from 0 to 10 on all pixels")
             for value in range(10):
-                matrix.setAllPixelsPWM([value]*192)
+                matrix.setAllPixelsPWM([value]*REGISTER_LEDPWM_LENGTH)
 
             print ("let's draw some rows and cols")
-            for row in range(12):
-                for col in range(16):
+            for row in range(9):
+                for col in range(39):
                     matrix.setPixelPWM(row,col, 2)
 
             print("let's set some arbitrary pixels (check for adjacent shorts)")
-            for i in range(11):
+            for i in range(9):
                 matrix.setPixelPWM(i,i,40)
-            for i in range(11):
-                matrix.setPixelPWM(11-i,i,20)
+            for i in range(9):
+                matrix.setPixelPWM(8-i,i,20)
             matrix.setPixelPWM(0,0,100)
             matrix.setPixelPWM(0,5,100)
             matrix.setPixelPWM(1,6,100)
-            matrix.setPixelPWM(0,10,100)
-            matrix.setPixelPWM(11,11,100)
-            matrix.setPixelPWM(11,11,100)
-            matrix.setPixelPWM(6,11,100)
+            # matrix.setPixelPWM(0,10,100)
+            # matrix.setPixelPWM(11,11,100)
+            # matrix.setPixelPWM(11,11,100)
+            # matrix.setPixelPWM(6,11,100)
             # matrix.setPixelPWM(3,12,3)
             time.sleep(1);
             print("all that done, now let's check for missing/short pixels.")
