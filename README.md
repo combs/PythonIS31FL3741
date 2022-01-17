@@ -7,7 +7,7 @@ A matrix-centric Python driver for the IS31FL3741 39x9 I2C scanning matrix drive
 
 ```
 
-matrix = IS31FL3741(address=0x6F, busnum=10, DEBUG=False)
+matrix = IS31FL3741(address=0x30, busnum=10, DEBUG=False)
 print("powering on all pixels")
 matrix.enableAllPixels()
 
