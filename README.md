@@ -3,7 +3,7 @@ A matrix-centric Python driver for the IS31FL3741 39x9 I2C scanning matrix drive
 
 [Datasheet](http://www.issi.com/WW/pdf/IS31FL3741.pdf)
 
-Usage
+## Usage
 
 ```
 
@@ -20,6 +20,8 @@ for value in range(10):
 
 ```
 
-Example projects
+The driver's `setAllPixelsPWM` function expects a flat, one-dimensional list of 39x9 greyscale values, organized by row (SW1-9). (The controller itself uses a funkier method of organizing these in its registers, which this Python driver handles on your behalf.)
+
+## Example projects
 
 - coming soon!
