@@ -166,8 +166,8 @@ class IS31FL3741(object):
         for i in range(6,9):
             pageTwo[(i-6)*30:(i-5)*30] = values[ 39 * i : 39 * i + 30]
         for i in range(9):
-            pageTwo[90:171] = values[ 39 * i + 30 : 39 * (i + 1) ] 
-
+            pageTwo[90+(i*9):90+((i+1)*9)] = values[ 39 * i + 30 : 39 * (i + 1) ] 
+        
         # pageOne = values[REGISTER_LEDPWM1_START:REGISTER_LEDPWM1_END+1]
         # pageTwo = values[REGISTER_LEDPWM1_END+1:REGISTER_LEDPWM1_END+1+REGISTER_LEDPWM2_END+1]
 
